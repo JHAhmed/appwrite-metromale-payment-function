@@ -19,7 +19,7 @@
 
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
-import { Client, TablesDB } from 'node-appwrite';
+import { Client, TablesDB, ID, Permission, Query, Role } from 'node-appwrite';
 
 export default async ({ req, res, log, error }) => {
 	// ── Parse request body ────────────────────────────────────────────────────
@@ -63,12 +63,16 @@ export default async ({ req, res, log, error }) => {
 
 		if (flow === 'appointment-checkout') {
 			const { appointmentId, userId } = body;
-			if (!appointmentId || !userId) {
-				return res.json({ error: 'Missing required fields: appointmentId, userId' }, 400);
+			if (!userId) {
+				return res.json({ error: 'Missing required field: userId' }, 400);
 			}
-			notes.appointmentId = appointmentId;
 			notes.userId = userId;
-			receipt = `appt_${appointmentId}`;
+			if (appointmentId) {
+				notes.appointmentId = appointmentId;
+				receipt = `appt_${appointmentId}`;
+			} else {
+				receipt = `appt_${Date.now()}`;
+			}
 		} else if (flow === 'shop-checkout') {
 			const { description, cartSummary } = body;
 			notes.description = description || 'Shop order';
@@ -134,32 +138,129 @@ export default async ({ req, res, log, error }) => {
 
 		// ── Flow-specific post-verification logic ────────────────────────────
 		if (flow === 'appointment-checkout') {
-			const { appointmentId } = body;
-			if (!appointmentId) {
-				return res.json({ error: 'Missing appointmentId for appointment flow' }, 400);
+			const { appointmentId, bookingData, userId } = body;
+
+			if (appointmentId) {
+				try {
+					await tablesDB.updateRow(
+						process.env.APPWRITE_DATABASE_ID,
+						process.env.APPWRITE_TABLE_ID,
+						appointmentId,
+						{
+							paymentCompleted: true,
+							status: 'confirmed',
+							razorpayPaymentId: razorpay_payment_id,
+							razorpayOrderId: razorpay_order_id
+						}
+					);
+
+					log(`Appointment ${appointmentId} marked as paid`);
+					return res.json({
+						success: true,
+						paymentId: razorpay_payment_id,
+						appointmentId
+					});
+				} catch (err) {
+					error(`Failed to update appointment ${appointmentId}: ${err.message}`);
+					return res.json({
+						success: true,
+						paymentId: razorpay_payment_id,
+						warning: 'Payment verified but DB update failed — please contact support.'
+					});
+				}
 			}
 
 			try {
-				await tablesDB.updateRow(
+				const existingAppointments = await tablesDB.listRows(
 					process.env.APPWRITE_DATABASE_ID,
 					process.env.APPWRITE_TABLE_ID,
-					appointmentId,
-					{
-						paymentCompleted: true,
-						status: 'confirmed',
-						razorpayPaymentId: razorpay_payment_id,
-						razorpayOrderId: razorpay_order_id
-					}
+					[Query.equal('razorpayOrderId', razorpay_order_id), Query.limit(1)]
 				);
 
-				log(`Appointment ${appointmentId} marked as paid`);
-				return res.json({ success: true, paymentId: razorpay_payment_id });
-			} catch (err) {
-				error(`Failed to update appointment ${appointmentId}: ${err.message}`);
+				if (existingAppointments.total > 0) {
+					const existingAppointment = existingAppointments.rows[0];
+					log(`Appointment ${existingAppointment.$id} already exists for ${razorpay_order_id}`);
+					return res.json({
+						success: true,
+						paymentId: razorpay_payment_id,
+						appointmentId: existingAppointment.$id
+					});
+				}
+
+				if (!bookingData || typeof bookingData !== 'object') {
+					return res.json({ error: 'Missing bookingData for appointment checkout flow' }, 400);
+				}
+
+				const ownerUserId = bookingData.userId || userId;
+				if (!ownerUserId) {
+					return res.json({ error: 'Missing userId for appointment checkout flow' }, 400);
+				}
+
+				if (userId && bookingData.userId && bookingData.userId !== userId) {
+					return res.json({ error: 'bookingData userId does not match request userId' }, 400);
+				}
+
+				const appointmentData = {
+					userId: ownerUserId,
+					appointmentSlot: bookingData.appointmentSlot,
+					appointmentDatetime: bookingData.appointmentDatetime,
+					branch: bookingData.branch,
+					patientName: bookingData.patientName,
+					patientAge: bookingData.patientAge,
+					patientGender: bookingData.patientGender,
+					patientPhone: bookingData.patientPhone || null,
+					patientEmail: bookingData.patientEmail || null,
+					guardianName: bookingData.guardianName || null,
+					guardianAge: bookingData.guardianAge || null,
+					guardianPhone: bookingData.guardianPhone || null,
+					guardianEmail: bookingData.guardianEmail || null,
+					guardianRelation: bookingData.guardianRelation || null,
+					paymentCompleted: true,
+					status: 'confirmed',
+					razorpayPaymentId: razorpay_payment_id,
+					razorpayOrderId: razorpay_order_id
+				};
+
+				const missingFields = [
+					['appointmentSlot', appointmentData.appointmentSlot],
+					['appointmentDatetime', appointmentData.appointmentDatetime],
+					['branch', appointmentData.branch],
+					['patientName', appointmentData.patientName],
+					['patientAge', appointmentData.patientAge],
+					['patientGender', appointmentData.patientGender]
+				]
+					.filter(([, value]) => value === undefined || value === null || value === '')
+					.map(([field]) => field);
+
+				if (missingFields.length > 0) {
+					return res.json(
+						{
+							error: `Missing required booking fields: ${missingFields.join(', ')}`
+						},
+						400
+					);
+				}
+
+				const appointment = await tablesDB.createRow(
+					process.env.APPWRITE_DATABASE_ID,
+					process.env.APPWRITE_TABLE_ID,
+					ID.unique(),
+					appointmentData,
+					[Permission.read(Role.user(ownerUserId)), Permission.write(Role.user(ownerUserId))]
+				);
+
+				log(`Appointment ${appointment.$id} created after payment verification`);
 				return res.json({
 					success: true,
 					paymentId: razorpay_payment_id,
-					warning: 'Payment verified but DB update failed — please contact support.'
+					appointmentId: appointment.$id
+				});
+			} catch (err) {
+				error(`Failed to create appointment after payment verification: ${err.message}`);
+				return res.json({
+					success: true,
+					paymentId: razorpay_payment_id,
+					warning: 'Payment verified but appointment creation failed — please contact support.'
 				});
 			}
 		}
