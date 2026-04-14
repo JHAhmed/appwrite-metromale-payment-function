@@ -14,6 +14,7 @@
 //   APPWRITE_ENDPOINT       — https://fra.cloud.appwrite.io/v1
 //   APPWRITE_DATABASE_ID    — metromale
 //   APPWRITE_TABLE_ID       — appointments
+//   APPWRITE_SHOP_ORDERS_TABLE_ID — shop_orders
 
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
@@ -187,8 +188,58 @@ export default async ({ req, res, log, error }) => {
 			}
 		}
 
-		// ── Shop flow: signature verified = success ──────────────────────────
-		// Order details are stored in Razorpay notes and visible in Dashboard
+		// ── Shop flow: CREATE order in shop_orders table ────────────────────
+		if (flow === 'shop-checkout') {
+			const { orderData, userId } = body;
+
+			if (!orderData || !userId) {
+				return res.json({
+					error: 'Missing orderData or userId for shop order creation',
+					success: false
+				}, 400);
+			}
+
+			try {
+				const newOrder = await tablesDB.createRow(
+					process.env.APPWRITE_DATABASE_ID,
+					process.env.APPWRITE_SHOP_ORDERS_TABLE_ID,
+					ID.unique(),
+					{
+						userId: userId,
+						orderId: razorpay_order_id,
+						customerName: orderData.customerName,
+						customerEmail: orderData.customerEmail,
+						customerPhone: orderData.customerPhone || null,
+						shippingAddress: orderData.shippingAddress,
+						items: orderData.items, // JSON string of cart items
+						totalAmount: orderData.totalAmount,
+						itemCount: orderData.itemCount,
+						status: 'confirmed',
+						paymentStatus: 'paid'
+					},
+					[
+						Permission.read(Role.user(userId)),
+						Permission.write(Role.user(userId))
+					]
+				);
+
+				log(`Shop order created: ${newOrder.$id} for user ${userId}`);
+				return res.json({
+					success: true,
+					paymentId: razorpay_payment_id,
+					shopOrderId: newOrder.$id
+				});
+			} catch (err) {
+				error(`Failed to create shop order: ${err.message}`);
+				return res.json({
+					success: true,
+					paymentId: razorpay_payment_id,
+					warning: 'Payment verified but order creation failed — please contact support.'
+				});
+			}
+		}
+
+		// Fallback for unknown flows
 		return res.json({ success: true, paymentId: razorpay_payment_id });
 	}
 
