@@ -60,6 +60,8 @@ export default async ({ req, res, log, error }) => {
 				currency,
 				receipt: `appt_${appointmentId}`,
 				notes: {
+					source: 'metromale-app',
+					flow: 'appointment-checkout',
 					appointmentId,
 					userId
 				}
