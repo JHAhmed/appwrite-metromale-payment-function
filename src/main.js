@@ -2,24 +2,22 @@
 // Runtime: node-18.0 (or node-22.0)
 // Handles two actions:
 //   1. action = "create-order"  → creates a Razorpay Order and returns order ID
-//   2. action = "verify-payment" → verifies the HMAC signature and updates the DB
-//
-// Supports multiple flows:
-//   - "appointment-checkout" → updates appointment paymentCompleted in DB
-//   - "shop-checkout"        → verify-only (order data stored in Razorpay notes)
+//   2. action = "verify-payment" → verifies HMAC signature, then:
+//        - appointment-checkout: CREATES the appointment row in DB (only after payment)
+//        - shop-checkout: verify-only (order data stored in Razorpay notes)
 //
 // Required Environment Variables (set in Appwrite Console → Functions → Settings → Variables):
-//   RAZORPAY_KEY_ID         — your Razorpay live/test key ID   (rzp_live_xxx or rzp_test_xxx)
-//   RAZORPAY_KEY_SECRET     — your Razorpay secret key (NEVER expose this client-side)
+//   RAZORPAY_KEY_ID         — your Razorpay live/test key ID
+//   RAZORPAY_KEY_SECRET     — your Razorpay secret key
 //   APPWRITE_API_KEY        — an Appwrite server API key with Database read+write access
-//   APPWRITE_PROJECT_ID     — your Appwrite project ID (metromale)
+//   APPWRITE_PROJECT_ID     — metromale
 //   APPWRITE_ENDPOINT       — https://fra.cloud.appwrite.io/v1
 //   APPWRITE_DATABASE_ID    — metromale
 //   APPWRITE_TABLE_ID       — appointments
 
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
-import { Client, TablesDB, ID, Permission, Query, Role } from 'node-appwrite';
+import { Client, TablesDB, ID, Permission, Role } from 'node-appwrite';
 
 export default async ({ req, res, log, error }) => {
 	// ── Parse request body ────────────────────────────────────────────────────
@@ -62,34 +60,27 @@ export default async ({ req, res, log, error }) => {
 		let receipt = `order_${Date.now()}`;
 
 		if (flow === 'appointment-checkout') {
-			const { appointmentId, userId } = body;
+			const { userId } = body;
 			if (!userId) {
 				return res.json({ error: 'Missing required field: userId' }, 400);
 			}
 			notes.userId = userId;
-			if (appointmentId) {
-				notes.appointmentId = appointmentId;
-				receipt = `appt_${appointmentId}`;
-			} else {
-				receipt = `appt_${Date.now()}`;
-			}
+			receipt = `appt_${Date.now()}`;
 		} else if (flow === 'shop-checkout') {
 			const { description, cartSummary } = body;
 			notes.description = description || 'Shop order';
-			// Razorpay notes values must be strings, max 512 chars per value
 			if (cartSummary) {
 				notes.itemCount = String(cartSummary.length);
-				notes.items = JSON.stringify(cartSummary.map((i) => `${i.name} x${i.quantity}`)).slice(
-					0,
-					512
-				);
+				notes.items = JSON.stringify(
+					cartSummary.map((i) => `${i.name} x${i.quantity}`)
+				).slice(0, 512);
 			}
 			receipt = `shop_${Date.now()}`;
 		}
 
 		try {
 			const order = await razorpay.orders.create({
-				amount: Math.round(amount), // must be integer paise
+				amount: Math.round(amount),
 				currency,
 				receipt,
 				notes
@@ -136,127 +127,58 @@ export default async ({ req, res, log, error }) => {
 
 		log(`Payment verified: ${razorpay_payment_id} (flow: ${flow})`);
 
-		// ── Flow-specific post-verification logic ────────────────────────────
+		// ── Appointment flow: CREATE the appointment only now ─────────────────
 		if (flow === 'appointment-checkout') {
-			const { appointmentId, bookingData, userId } = body;
+			const { bookingData, userId } = body;
 
-			if (appointmentId) {
-				try {
-					await tablesDB.updateRow(
-						process.env.APPWRITE_DATABASE_ID,
-						process.env.APPWRITE_TABLE_ID,
-						appointmentId,
-						{
-							paymentCompleted: true,
-							status: 'confirmed',
-							razorpayPaymentId: razorpay_payment_id,
-							razorpayOrderId: razorpay_order_id
-						}
-					);
-
-					log(`Appointment ${appointmentId} marked as paid`);
-					return res.json({
-						success: true,
-						paymentId: razorpay_payment_id,
-						appointmentId
-					});
-				} catch (err) {
-					error(`Failed to update appointment ${appointmentId}: ${err.message}`);
-					return res.json({
-						success: true,
-						paymentId: razorpay_payment_id,
-						warning: 'Payment verified but DB update failed — please contact support.'
-					});
-				}
+			if (!bookingData || !userId) {
+				return res.json({
+					error: 'Missing bookingData or userId for appointment creation',
+					success: false
+				}, 400);
 			}
 
 			try {
-				const existingAppointments = await tablesDB.listRows(
-					process.env.APPWRITE_DATABASE_ID,
-					process.env.APPWRITE_TABLE_ID,
-					[Query.equal('razorpayOrderId', razorpay_order_id), Query.limit(1)]
-				);
-
-				if (existingAppointments.total > 0) {
-					const existingAppointment = existingAppointments.rows[0];
-					log(`Appointment ${existingAppointment.$id} already exists for ${razorpay_order_id}`);
-					return res.json({
-						success: true,
-						paymentId: razorpay_payment_id,
-						appointmentId: existingAppointment.$id
-					});
-				}
-
-				if (!bookingData || typeof bookingData !== 'object') {
-					return res.json({ error: 'Missing bookingData for appointment checkout flow' }, 400);
-				}
-
-				const ownerUserId = bookingData.userId || userId;
-				if (!ownerUserId) {
-					return res.json({ error: 'Missing userId for appointment checkout flow' }, 400);
-				}
-
-				if (userId && bookingData.userId && bookingData.userId !== userId) {
-					return res.json({ error: 'bookingData userId does not match request userId' }, 400);
-				}
-
-				const appointmentData = {
-					userId: ownerUserId,
-					appointmentSlot: bookingData.appointmentSlot,
-					appointmentDatetime: bookingData.appointmentDatetime,
-					branch: bookingData.branch,
-					patientName: bookingData.patientName,
-					patientAge: bookingData.patientAge,
-					patientGender: bookingData.patientGender,
-					patientPhone: bookingData.patientPhone || null,
-					patientEmail: bookingData.patientEmail || null,
-					guardianName: bookingData.guardianName || null,
-					guardianAge: bookingData.guardianAge || null,
-					guardianPhone: bookingData.guardianPhone || null,
-					guardianEmail: bookingData.guardianEmail || null,
-					guardianRelation: bookingData.guardianRelation || null,
-					paymentCompleted: true,
-					status: 'confirmed',
-					razorpayPaymentId: razorpay_payment_id,
-					razorpayOrderId: razorpay_order_id
-				};
-
-				const missingFields = [
-					['appointmentSlot', appointmentData.appointmentSlot],
-					['appointmentDatetime', appointmentData.appointmentDatetime],
-					['branch', appointmentData.branch],
-					['patientName', appointmentData.patientName],
-					['patientAge', appointmentData.patientAge],
-					['patientGender', appointmentData.patientGender]
-				]
-					.filter(([, value]) => value === undefined || value === null || value === '')
-					.map(([field]) => field);
-
-				if (missingFields.length > 0) {
-					return res.json(
-						{
-							error: `Missing required booking fields: ${missingFields.join(', ')}`
-						},
-						400
-					);
-				}
-
-				const appointment = await tablesDB.createRow(
+				// Create the appointment row — only happens after verified payment
+				const newAppointment = await tablesDB.createRow(
 					process.env.APPWRITE_DATABASE_ID,
 					process.env.APPWRITE_TABLE_ID,
 					ID.unique(),
-					appointmentData,
-					[Permission.read(Role.user(ownerUserId)), Permission.write(Role.user(ownerUserId))]
+					{
+						userId: userId,
+						appointmentSlot: bookingData.appointmentSlot,
+						appointmentDatetime: bookingData.appointmentDatetime,
+						branch: bookingData.branch,
+						patientName: bookingData.patientName,
+						patientAge: bookingData.patientAge,
+						patientGender: bookingData.patientGender,
+						patientPhone: bookingData.patientPhone || '',
+						patientEmail: bookingData.patientEmail || '',
+						guardianName: bookingData.guardianName || null,
+						guardianAge: bookingData.guardianAge || null,
+						guardianPhone: bookingData.guardianPhone || null,
+						guardianEmail: bookingData.guardianEmail || null,
+						guardianRelation: bookingData.guardianRelation || null,
+						status: 'confirmed',
+						paymentCompleted: true,
+						razorpayPaymentId: razorpay_payment_id,
+						razorpayOrderId: razorpay_order_id
+					},
+					[
+						Permission.read(Role.user(userId)),
+						Permission.write(Role.user(userId))
+					]
 				);
 
-				log(`Appointment ${appointment.$id} created after payment verification`);
+				log(`Appointment created: ${newAppointment.$id} for user ${userId}`);
 				return res.json({
 					success: true,
 					paymentId: razorpay_payment_id,
-					appointmentId: appointment.$id
+					appointmentId: newAppointment.$id
 				});
 			} catch (err) {
-				error(`Failed to create appointment after payment verification: ${err.message}`);
+				error(`Failed to create appointment: ${err.message}`);
+				// Payment IS verified but DB create failed
 				return res.json({
 					success: true,
 					paymentId: razorpay_payment_id,
@@ -265,7 +187,7 @@ export default async ({ req, res, log, error }) => {
 			}
 		}
 
-		// For shop-checkout (and any future flows): signature verified = success
+		// ── Shop flow: signature verified = success ──────────────────────────
 		// Order details are stored in Razorpay notes and visible in Dashboard
 		return res.json({ success: true, paymentId: razorpay_payment_id });
 	}
