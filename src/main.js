@@ -41,6 +41,8 @@ export default async ({ req, res, log, error }) => {
 		.setKey(process.env.APPWRITE_API_KEY);
 
 	const tablesDB = new TablesDB(appwriteClient);
+	log('Appwrite client initialized');
+	console.log('Appwrite client initialized');
 
 	// ════════════════════════════════════════════════════════════════════════════
 	// ACTION: create-order
@@ -64,6 +66,7 @@ export default async ({ req, res, log, error }) => {
 			});
 
 			log(`Razorpay order created: ${order.id} for appointment ${appointmentId}`);
+			console.log(`Razorpay order created: ${order.id} for appointment ${appointmentId}`);
 
 			return res.json({
 				orderId: order.id,
@@ -72,6 +75,7 @@ export default async ({ req, res, log, error }) => {
 			});
 		} catch (err) {
 			error(`Failed to create Razorpay order: ${err.message}`);
+			console.log(`Failed to create Razorpay order: ${err.message}`);
 			return res.json({ error: err.message || 'Failed to create order' }, 500);
 		}
 	}
