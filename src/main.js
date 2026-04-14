@@ -75,9 +75,10 @@ export default async ({ req, res, log, error }) => {
 			// Razorpay notes values must be strings, max 512 chars per value
 			if (cartSummary) {
 				notes.itemCount = String(cartSummary.length);
-				notes.items = JSON.stringify(
-					cartSummary.map((i) => `${i.name} x${i.quantity}`)
-				).slice(0, 512);
+				notes.items = JSON.stringify(cartSummary.map((i) => `${i.name} x${i.quantity}`)).slice(
+					0,
+					512
+				);
 			}
 			receipt = `shop_${Date.now()}`;
 		}
@@ -107,7 +108,12 @@ export default async ({ req, res, log, error }) => {
 	// ACTION: verify-payment
 	// ════════════════════════════════════════════════════════════════════════════
 	if (action === 'verify-payment') {
-		const { razorpay_order_id, razorpay_payment_id, razorpay_signature, flow = 'appointment-checkout' } = body;
+		const {
+			razorpay_order_id,
+			razorpay_payment_id,
+			razorpay_signature,
+			flow = 'appointment-checkout'
+		} = body;
 
 		if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
 			return res.json({ error: 'Missing required payment verification fields' }, 400);
@@ -140,6 +146,7 @@ export default async ({ req, res, log, error }) => {
 					appointmentId,
 					{
 						paymentCompleted: true,
+						status: 'confirmed',
 						razorpayPaymentId: razorpay_payment_id,
 						razorpayOrderId: razorpay_order_id
 					}
