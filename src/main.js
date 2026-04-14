@@ -4,6 +4,10 @@
 //   1. action = "create-order"  → creates a Razorpay Order and returns order ID
 //   2. action = "verify-payment" → verifies the HMAC signature and updates the DB
 //
+// Supports multiple flows:
+//   - "appointment-checkout" → updates appointment paymentCompleted in DB
+//   - "shop-checkout"        → verify-only (order data stored in Razorpay notes)
+//
 // Required Environment Variables (set in Appwrite Console → Functions → Settings → Variables):
 //   RAZORPAY_KEY_ID         — your Razorpay live/test key ID   (rzp_live_xxx or rzp_test_xxx)
 //   RAZORPAY_KEY_SECRET     — your Razorpay secret key (NEVER expose this client-side)
@@ -42,33 +46,51 @@ export default async ({ req, res, log, error }) => {
 
 	const tablesDB = new TablesDB(appwriteClient);
 	log('Appwrite client initialized');
-	console.log('Appwrite client initialized');
 
 	// ════════════════════════════════════════════════════════════════════════════
 	// ACTION: create-order
 	// ════════════════════════════════════════════════════════════════════════════
 	if (action === 'create-order') {
-		const { amount, currency = 'INR', appointmentId, userId } = body;
+		const { amount, currency = 'INR', flow = 'appointment-checkout' } = body;
 
-		if (!amount || !appointmentId || !userId) {
-			return res.json({ error: 'Missing required fields: amount, appointmentId, userId' }, 400);
+		if (!amount) {
+			return res.json({ error: 'Missing required field: amount' }, 400);
+		}
+
+		// Build notes and receipt based on flow
+		let notes = { source: 'metromale-app', flow };
+		let receipt = `order_${Date.now()}`;
+
+		if (flow === 'appointment-checkout') {
+			const { appointmentId, userId } = body;
+			if (!appointmentId || !userId) {
+				return res.json({ error: 'Missing required fields: appointmentId, userId' }, 400);
+			}
+			notes.appointmentId = appointmentId;
+			notes.userId = userId;
+			receipt = `appt_${appointmentId}`;
+		} else if (flow === 'shop-checkout') {
+			const { description, cartSummary } = body;
+			notes.description = description || 'Shop order';
+			// Razorpay notes values must be strings, max 512 chars per value
+			if (cartSummary) {
+				notes.itemCount = String(cartSummary.length);
+				notes.items = JSON.stringify(
+					cartSummary.map((i) => `${i.name} x${i.quantity}`)
+				).slice(0, 512);
+			}
+			receipt = `shop_${Date.now()}`;
 		}
 
 		try {
 			const order = await razorpay.orders.create({
 				amount: Math.round(amount), // must be integer paise
 				currency,
-				receipt: `appt_${appointmentId}`,
-				notes: {
-					source: 'metromale-app',
-					flow: 'appointment-checkout',
-					appointmentId,
-					userId
-				}
+				receipt,
+				notes
 			});
 
-			log(`Razorpay order created: ${order.id} for appointment ${appointmentId}`);
-			console.log(`Razorpay order created: ${order.id} for appointment ${appointmentId}`);
+			log(`Razorpay order created: ${order.id} (flow: ${flow})`);
 
 			return res.json({
 				orderId: order.id,
@@ -77,7 +99,6 @@ export default async ({ req, res, log, error }) => {
 			});
 		} catch (err) {
 			error(`Failed to create Razorpay order: ${err.message}`);
-			console.log(`Failed to create Razorpay order: ${err.message}`);
 			return res.json({ error: err.message || 'Failed to create order' }, 500);
 		}
 	}
@@ -86,10 +107,9 @@ export default async ({ req, res, log, error }) => {
 	// ACTION: verify-payment
 	// ════════════════════════════════════════════════════════════════════════════
 	if (action === 'verify-payment') {
-		const { razorpay_order_id, razorpay_payment_id, razorpay_signature, appointmentId, userId } =
-			body;
+		const { razorpay_order_id, razorpay_payment_id, razorpay_signature, flow = 'appointment-checkout' } = body;
 
-		if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !appointmentId) {
+		if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
 			return res.json({ error: 'Missing required payment verification fields' }, 400);
 		}
 
@@ -100,37 +120,46 @@ export default async ({ req, res, log, error }) => {
 			.digest('hex');
 
 		if (expectedSignature !== razorpay_signature) {
-			error(`Signature mismatch for appointment ${appointmentId}`);
+			error(`Signature mismatch for order ${razorpay_order_id}`);
 			return res.json({ error: 'Payment signature verification failed', success: false }, 400);
 		}
 
-		log(`Payment verified for appointment ${appointmentId}, payment ID: ${razorpay_payment_id}`);
+		log(`Payment verified: ${razorpay_payment_id} (flow: ${flow})`);
 
-		// Update the appointment in Appwrite DB
-		try {
-			await tablesDB.updateRow(
-				process.env.APPWRITE_DATABASE_ID,
-				process.env.APPWRITE_TABLE_ID,
-				appointmentId,
-				{
-					paymentCompleted: true,
-					razorpayPaymentId: razorpay_payment_id,
-					razorpayOrderId: razorpay_order_id
-				}
-			);
+		// ── Flow-specific post-verification logic ────────────────────────────
+		if (flow === 'appointment-checkout') {
+			const { appointmentId } = body;
+			if (!appointmentId) {
+				return res.json({ error: 'Missing appointmentId for appointment flow' }, 400);
+			}
 
-			log(`Appointment ${appointmentId} marked as paid`);
-			return res.json({ success: true, paymentId: razorpay_payment_id });
-		} catch (err) {
-			error(`Failed to update appointment ${appointmentId}: ${err.message}`);
-			// Payment IS verified but DB update failed — return success so user isn't stuck
-			// You can reconcile this manually via Razorpay Dashboard
-			return res.json({
-				success: true,
-				paymentId: razorpay_payment_id,
-				warning: 'Payment verified but DB update failed — please contact support.'
-			});
+			try {
+				await tablesDB.updateRow(
+					process.env.APPWRITE_DATABASE_ID,
+					process.env.APPWRITE_TABLE_ID,
+					appointmentId,
+					{
+						paymentCompleted: true,
+						razorpayPaymentId: razorpay_payment_id,
+						razorpayOrderId: razorpay_order_id
+					}
+				);
+
+				log(`Appointment ${appointmentId} marked as paid`);
+				return res.json({ success: true, paymentId: razorpay_payment_id });
+			} catch (err) {
+				error(`Failed to update appointment ${appointmentId}: ${err.message}`);
+				return res.json({
+					success: true,
+					paymentId: razorpay_payment_id,
+					warning: 'Payment verified but DB update failed — please contact support.'
+				});
+			}
 		}
+
+		// For shop-checkout (and any future flows): signature verified = success
+		// Order details are stored in Razorpay notes and visible in Dashboard
+		return res.json({ success: true, paymentId: razorpay_payment_id });
 	}
 
 	// ── Unknown action ────────────────────────────────────────────────────────
