@@ -46,7 +46,6 @@ export default async ({ req, res, log, error }) => {
 
 	const plunk = new Plunk(process.env.PLUNK_API_KEY);
 
-
 	const tablesDB = new TablesDB(appwriteClient);
 	log('Appwrite client initialized');
 
@@ -76,9 +75,10 @@ export default async ({ req, res, log, error }) => {
 			notes.description = description || 'Shop order';
 			if (cartSummary) {
 				notes.itemCount = String(cartSummary.length);
-				notes.items = JSON.stringify(
-					cartSummary.map((i) => `${i.name} x${i.quantity}`)
-				).slice(0, 512);
+				notes.items = JSON.stringify(cartSummary.map((i) => `${i.name} x${i.quantity}`)).slice(
+					0,
+					512
+				);
 			}
 			receipt = `shop_${Date.now()}`;
 		}
@@ -137,10 +137,13 @@ export default async ({ req, res, log, error }) => {
 			const { bookingData, userId } = body;
 
 			if (!bookingData || !userId) {
-				return res.json({
-					error: 'Missing bookingData or userId for appointment creation',
-					success: false
-				}, 400);
+				return res.json(
+					{
+						error: 'Missing bookingData or userId for appointment creation',
+						success: false
+					},
+					400
+				);
 			}
 
 			try {
@@ -169,21 +172,24 @@ export default async ({ req, res, log, error }) => {
 						razorpayPaymentId: razorpay_payment_id,
 						razorpayOrderId: razorpay_order_id
 					},
-					[
-						Permission.read(Role.user(userId)),
-						Permission.write(Role.user(userId))
-					]
+					[Permission.read(Role.user(userId)), Permission.write(Role.user(userId))]
 				);
 
 				log(`Appointment created: ${newAppointment.$id} for user ${userId}`);
 
-
 				try {
-					const patientEmailResult = await plunk.emails.send({
-						from: 'noreply@wurks.studio',
-						to: [bookingData.patientEmail, "jamalhascientist@gmail.com"],
-						subject: 'Your appointment is confirmed!',
-						body: `
+					const customerRes = await fetch('https://next-api.useplunk.com/v1/send', {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+							Authorization: `Bearer ${process.env.PLUNK_API_KEY}`
+						},
+						body: JSON.stringify({
+							to: [bookingData.patientEmail, 'jamalhascientist@gmail.com'],
+							from: 'noreply@wurks.studio',
+							subject: 'Your appointment is confirmed!',
+							body: `
+
 							Hi ${bookingData.patientName},
 
 							Your appointment for ${bookingData.appointmentDatetime} at our ${bookingData.branch} branch has been confirmed.
@@ -199,16 +205,23 @@ export default async ({ req, res, log, error }) => {
 
 							If you have any questions, please contact us.
 
-							Thank you for choosing MetroMale Health!
+							Thank you for choosing Metromale Clinic!
 						`
-					}) 
+						})
+					});
 					log(`Confirmation email sent for appointment ${newAppointment.$id}`);
 
-					const adminEmailResult = await plunk.emails.send({
-						from: 'noreply@wurks.studio',
-						to: 'marketing@gunasekaranhospital.com',
-						subject: 'New appointment booked',
-						body: `
+					const adminRes = await fetch('https://next-api.useplunk.com/v1/send', {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+							Authorization: `Bearer ${process.env.PLUNK_API_KEY}`
+						},
+						body: JSON.stringify({
+							to: ['marketing@gunasekaranhospital.com', 'jamalhascientist@gmail.com'],
+							from: 'noreply@wurks.studio',
+							subject: 'New appointment booked!',
+							body: `
 							A new appointment has been booked.
 
 							Appointment Details:
@@ -224,13 +237,14 @@ export default async ({ req, res, log, error }) => {
 
 							Please check the Metromale Admin console for more details.
 						`
+						})
 					});
 					log(`Admin notification email sent for appointment ${newAppointment.$id}`);
-
 				} catch (emailErr) {
-					log(`Failed to send confirmation email for appointment ${newAppointment.$id}: ${emailErr.message}`);
+					log(
+						`Failed to send confirmation email for appointment ${newAppointment.$id}: ${emailErr.message}`
+					);
 				}
-
 
 				return res.json({
 					success: true,
@@ -253,10 +267,13 @@ export default async ({ req, res, log, error }) => {
 			const { orderData, userId } = body;
 
 			if (!orderData || !userId) {
-				return res.json({
-					error: 'Missing orderData or userId for shop order creation',
-					success: false
-				}, 400);
+				return res.json(
+					{
+						error: 'Missing orderData or userId for shop order creation',
+						success: false
+					},
+					400
+				);
 			}
 
 			try {
@@ -277,10 +294,7 @@ export default async ({ req, res, log, error }) => {
 						status: 'confirmed',
 						paymentStatus: 'paid'
 					},
-					[
-						Permission.read(Role.user(userId)),
-						Permission.write(Role.user(userId))
-					]
+					[Permission.read(Role.user(userId)), Permission.write(Role.user(userId))]
 				);
 
 				log(`Shop order created: ${newOrder.$id} for user ${userId}`);
