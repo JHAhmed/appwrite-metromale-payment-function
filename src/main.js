@@ -19,7 +19,6 @@
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import { Client, TablesDB, ID, Permission, Role } from 'node-appwrite';
-import Plunk from '@plunk/node';
 
 export default async ({ req, res, log, error }) => {
 	// ── Parse request body ────────────────────────────────────────────────────
@@ -43,8 +42,6 @@ export default async ({ req, res, log, error }) => {
 		.setEndpoint(process.env.APPWRITE_ENDPOINT)
 		.setProject(process.env.APPWRITE_PROJECT_ID)
 		.setKey(process.env.APPWRITE_API_KEY);
-
-	const plunk = new Plunk(process.env.PLUNK_API_KEY);
 
 	const tablesDB = new TablesDB(appwriteClient);
 	log('Appwrite client initialized');
