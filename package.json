@@ -9,6 +9,7 @@
 	},
 	"dependencies": {
 		"node-appwrite": "^22.0.0",
-		"razorpay": "^2.9.2"
+		"razorpay": "^2.9.2",
+		"@plunk/node": "^3.0.3"
 	}
 }

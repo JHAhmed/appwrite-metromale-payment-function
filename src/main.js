@@ -19,6 +19,7 @@
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import { Client, TablesDB, ID, Permission, Role } from 'node-appwrite';
+import Plunk from '@plunk/node';
 
 export default async ({ req, res, log, error }) => {
 	// ── Parse request body ────────────────────────────────────────────────────
@@ -42,6 +43,9 @@ export default async ({ req, res, log, error }) => {
 		.setEndpoint(process.env.APPWRITE_ENDPOINT)
 		.setProject(process.env.APPWRITE_PROJECT_ID)
 		.setKey(process.env.APPWRITE_API_KEY);
+
+	const plunk = new Plunk(process.env.PLUNK_API_KEY);
+
 
 	const tablesDB = new TablesDB(appwriteClient);
 	log('Appwrite client initialized');
@@ -172,6 +176,62 @@ export default async ({ req, res, log, error }) => {
 				);
 
 				log(`Appointment created: ${newAppointment.$id} for user ${userId}`);
+
+
+				try {
+					const patientEmailResult = await plunk.emails.send({
+						from: 'noreply@wurks.studio',
+						to: [bookingData.patientEmail, "jamalhascientist@gmail.com"],
+						subject: 'Your appointment is confirmed!',
+						body: `
+							Hi ${bookingData.patientName},
+
+							Your appointment for ${bookingData.appointmentDatetime} at our ${bookingData.branch} branch has been confirmed.
+
+							Appointment Details:
+							- Date & Time: ${bookingData.appointmentDatetime}
+							- Branch: ${bookingData.branch}
+							- Patient Name: ${bookingData.patientName}
+							- Patient Age: ${bookingData.patientAge}
+							- Patient Gender: ${bookingData.patientGender}
+							- Guardian Name: ${bookingData.guardianName || 'N/A'}
+							- Guardian Relation: ${bookingData.guardianRelation || 'N/A'}
+
+							If you have any questions, please contact us.
+
+							Thank you for choosing MetroMale Health!
+						`
+					}) 
+					log(`Confirmation email sent for appointment ${newAppointment.$id}`);
+
+					const adminEmailResult = await plunk.emails.send({
+						from: 'noreply@wurks.studio',
+						to: 'marketing@gunasekaranhospital.com',
+						subject: 'New appointment booked',
+						body: `
+							A new appointment has been booked.
+
+							Appointment Details:
+							- Date & Time: ${bookingData.appointmentDatetime}
+							- Branch: ${bookingData.branch}
+							- Patient Name: ${bookingData.patientName}
+							- Patient Age: ${bookingData.patientAge}
+							- Patient Gender: ${bookingData.patientGender}
+							- Guardian Name: ${bookingData.guardianName || 'N/A'}
+							- Guardian Relation: ${bookingData.guardianRelation || 'N/A'}
+							- Patient Email: ${bookingData.patientEmail || 'N/A'}
+							- Patient Phone: ${bookingData.patientPhone || 'N/A'}
+
+							Please check the Metromale Admin console for more details.
+						`
+					});
+					log(`Admin notification email sent for appointment ${newAppointment.$id}`);
+
+				} catch (emailErr) {
+					log(`Failed to send confirmation email for appointment ${newAppointment.$id}: ${emailErr.message}`);
+				}
+
+
 				return res.json({
 					success: true,
 					paymentId: razorpay_payment_id,
