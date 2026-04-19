@@ -20,6 +20,153 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import { Client, TablesDB, ID, Permission, Role } from 'node-appwrite';
 
+function getOrderEmailTemplate(orderData, type = 'customer') {
+	// Simple HTML template for order confirmation (can be enhanced with better styling)
+	const isCustomer = type === 'customer';
+	const html = `
+	<div style="font-family:Arial,Helvetica,sans-serif;background:#f6f9fc;padding:24px;">
+	<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:auto;background:#ffffff;border-radius:8px;overflow:hidden;">
+		
+		<!-- Header -->
+		<tr>
+		<td style="background:#0f172a;color:#ffffff;padding:20px 24px;font-size:20px;font-weight:bold;">
+			Metromale Clinic
+		</td>
+		</tr>
+
+		<!-- Body -->
+		<tr>
+		<td style="padding:24px;color:#0f172a;font-size:14px;line-height:1.6;">
+			
+			<p style="margin:0 0 12px;">Hi <strong>${isCustomer ? orderData.customerName : 'Admin'}</strong>,</p>
+
+			${
+				isCustomer
+					? `
+				<p style="margin:0 0 16px;">
+					Thank you for your order! Your payment of <strong>${orderData.totalAmount} ${orderData.currency}</strong> has been received and your order is being processed.
+				</p>
+				`
+					: `
+				<p style="margin:0 0 16px;">
+					A new order has been placed.
+				</p>
+				`
+			}
+
+			<!-- Card -->
+			<div style="border:1px solid #e5e7eb;border-radius:6px;padding:16px;background:#f9fafb;margin-bottom:16px;">
+			<p style="margin:0 0 8px;"><strong>Order ID:</strong> ${orderData.orderId}</p>
+			<p style="margin:0 0 8px;"><strong>Customer Name:</strong> ${orderData.customerName}</p>
+			<p style="margin:0 0 8px;"><strong>Email:</strong> ${orderData.customerEmail}</p>
+			<p style="margin:0 0 8px;"><strong>Phone:</strong> ${orderData.customerPhone || 'N/A'}</p>
+			<p style="margin:0 0 8px;"><strong>Shipping Address:</strong> ${orderData.shippingAddress}</p>
+			<p style="margin:0 0 8px;"><strong>Items:</strong><br>${orderData.items
+				.map((i) => `&nbsp;&nbsp;- ${i.name} x${i.quantity}`)
+				.join('<br>')}</p>
+			<p style="margin:0;"><strong>Total Amount:</strong> ${orderData.totalAmount} ${orderData.currency}</p>
+			</div>
+
+			<p style="margin:0 0 16px;">
+			${
+				isCustomer
+					? 'If you have any questions about your order, feel free to reach out to us.'
+					: 'Check the Metromale Admin console for more details.'
+			}
+			</p>
+
+			<p style="margin:0;">Thank you for shopping with <strong>Metromale Clinic</strong>!</p>
+
+		</td>
+		</tr>
+
+		<!-- Footer -->
+		<tr>
+		<td style="background:#f1f5f9;color:#64748b;font-size:12px;padding:16px;text-align:center;">
+			© ${new Date().getFullYear()} Metromale Clinic
+		</td>
+		</tr>
+
+	</table>
+	</div>
+	`;
+
+	return html;
+}
+
+function getAppointmentEmailTemplate(bookingData, type = 'customer') {
+	// For simplicity, using the same template for both customer and admin with minor changes
+	const isCustomer = type === 'customer';
+	const html = `
+	<div style="font-family:Arial,Helvetica,sans-serif;background:#f6f9fc;padding:24px;">
+	<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:auto;background:#ffffff;border-radius:8px;overflow:hidden;">
+		
+		<!-- Header -->
+		<tr>
+		<td style="background:#0f172a;color:#ffffff;padding:20px 24px;font-size:20px;font-weight:bold;">
+			Metromale Clinic
+		</td>
+		</tr>
+
+		<!-- Body -->
+		<tr>
+		<td style="padding:24px;color:#0f172a;font-size:14px;line-height:1.6;">
+			
+			<p style="margin:0 0 12px;">Hi <strong>${isCustomer ? bookingData.patientName : 'Admin'}</strong>,</p>
+
+			${
+				isCustomer
+					? `
+				<p style="margin:0 0 16px;">
+					Your appointment has been <strong style="color:#16a34a;">confirmed</strong>.
+				</p>
+				`
+					: `
+				<p style="margin:0 0 16px;">
+					A new appointment has been booked.
+				</p>
+				`
+			}
+			
+
+			<!-- Card -->
+			<div style="border:1px solid #e5e7eb;border-radius:6px;padding:16px;background:#f9fafb;margin-bottom:16px;">
+			<p style="margin:0 0 8px;"><strong>Date & Time:</strong> ${bookingData.appointmentDatetime}</p>
+			<p style="margin:0 0 8px;"><strong>Branch:</strong> ${bookingData.branch}</p>
+			<p style="margin:0 0 8px;"><strong>Patient:</strong> ${bookingData.patientName}</p>
+			<p style="margin:0 0 8px;"><strong>Age:</strong> ${bookingData.patientAge}</p>
+			<p style="margin:0 0 8px;"><strong>Gender:</strong> ${bookingData.patientGender}</p>
+			<p style="margin:0 0 8px;"><strong>Guardian:</strong> ${bookingData.guardianName || 'N/A'}</p>
+			<p style="margin:0;"><strong>Relation:</strong> ${bookingData.guardianRelation || 'N/A'}</p>
+			</div>
+
+			<p style="margin:0 0 16px;">
+			${
+				isCustomer
+					? 'If you have any questions, feel free to reach out to us.'
+					: 'Check the Metromale Admin console for more details.'
+			}
+			</p>
+
+			<p style="margin:0;">Thank you for choosing <strong>Metromale Clinic</strong>.</p>
+
+		</td>
+		</tr>
+
+		<!-- Footer -->
+		<tr>
+		<td style="background:#f1f5f9;color:#64748b;font-size:12px;padding:16px;text-align:center;">
+			© ${new Date().getFullYear()} Metromale Clinic
+		</td>
+		</tr>
+
+	</table>
+	</div>
+	`;
+
+	return html;
+}
+
 export default async ({ req, res, log, error }) => {
 	// ── Parse request body ────────────────────────────────────────────────────
 	let body;
@@ -185,25 +332,7 @@ export default async ({ req, res, log, error }) => {
 							to: [bookingData.patientEmail, 'jamalhascientist@gmail.com'],
 							from: 'noreply@wurks.studio',
 							subject: 'Your appointment is confirmed!',
-							body: `
-
-							Hi ${bookingData.patientName},
-
-							Your appointment for ${bookingData.appointmentDatetime} at our ${bookingData.branch} branch has been confirmed.
-
-							Appointment Details:
-							- Date & Time: ${bookingData.appointmentDatetime}
-							- Branch: ${bookingData.branch}
-							- Patient Name: ${bookingData.patientName}
-							- Patient Age: ${bookingData.patientAge}
-							- Patient Gender: ${bookingData.patientGender}
-							- Guardian Name: ${bookingData.guardianName || 'N/A'}
-							- Guardian Relation: ${bookingData.guardianRelation || 'N/A'}
-
-							If you have any questions, please contact us.
-
-							Thank you for choosing Metromale Clinic!
-						`
+							body: getAppointmentEmailTemplate(bookingData, 'customer')
 						})
 					});
 					log(`Confirmation email sent for appointment ${newAppointment.$id}`);
@@ -218,22 +347,7 @@ export default async ({ req, res, log, error }) => {
 							to: ['marketing@gunasekaranhospital.com', 'jamalhascientist@gmail.com'],
 							from: 'noreply@wurks.studio',
 							subject: 'New appointment booked!',
-							body: `
-							A new appointment has been booked.
-
-							Appointment Details:
-							- Date & Time: ${bookingData.appointmentDatetime}
-							- Branch: ${bookingData.branch}
-							- Patient Name: ${bookingData.patientName}
-							- Patient Age: ${bookingData.patientAge}
-							- Patient Gender: ${bookingData.patientGender}
-							- Guardian Name: ${bookingData.guardianName || 'N/A'}
-							- Guardian Relation: ${bookingData.guardianRelation || 'N/A'}
-							- Patient Email: ${bookingData.patientEmail || 'N/A'}
-							- Patient Phone: ${bookingData.patientPhone || 'N/A'}
-
-							Please check the Metromale Admin console for more details.
-						`
+							body: getAppointmentEmailTemplate(bookingData, 'admin')
 						})
 					});
 					log(`Admin notification email sent for appointment ${newAppointment.$id}`);
@@ -293,6 +407,42 @@ export default async ({ req, res, log, error }) => {
 					},
 					[Permission.read(Role.user(userId)), Permission.write(Role.user(userId))]
 				);
+
+				try {
+					const customerRes = await fetch('https://next-api.useplunk.com/v1/send', {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+							Authorization: `Bearer ${process.env.PLUNK_API_KEY}`
+						},
+						body: JSON.stringify({
+							to: [orderData.customerEmail, 'jamalhascientist@gmail.com'],
+							from: 'noreply@wurks.studio',
+							subject: 'Your order is confirmed!',
+							body: getOrderEmailTemplate(orderData, 'customer')
+						})
+					});
+					log(`Confirmation email sent for shop order ${newOrder.$id}`);
+
+					const adminRes = await fetch('https://next-api.useplunk.com/v1/send', {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+							Authorization: `Bearer ${process.env.PLUNK_API_KEY}`
+						},
+						body: JSON.stringify({
+							to: ['marketing@gunasekaranhospital.com', 'jamalhascientist@gmail.com'],
+							from: 'noreply@wurks.studio',
+							subject: 'New shop order received!',
+							body: getShopOrderEmailTemplate(orderData, 'admin')
+						})
+					});
+					log(`Admin notification email sent for shop order ${newOrder.$id}`);
+				} catch (emailErr) {
+					log(
+						`Failed to send confirmation email for shop order ${newOrder.$id}: ${emailErr.message}`
+					);
+				}
 
 				log(`Shop order created: ${newOrder.$id} for user ${userId}`);
 				return res.json({
