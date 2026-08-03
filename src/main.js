@@ -311,7 +311,7 @@ export default async ({ req, res, log, error }) => {
 						guardianPhone: bookingData.guardianPhone || null,
 						guardianEmail: bookingData.guardianEmail || null,
 						guardianRelation: bookingData.guardianRelation || null,
-						status: 'confirmed',
+						status: 'pending',
 						paymentCompleted: true,
 						razorpayPaymentId: razorpay_payment_id,
 						razorpayOrderId: razorpay_order_id
@@ -402,7 +402,7 @@ export default async ({ req, res, log, error }) => {
 						items: orderData.items, // JSON string of cart items
 						totalAmount: orderData.totalAmount,
 						itemCount: orderData.itemCount,
-						status: 'confirmed',
+						status: 'pending',
 						paymentStatus: 'paid'
 					},
 					[Permission.read(Role.user(userId)), Permission.write(Role.user(userId))]
